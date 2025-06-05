@@ -66,38 +66,54 @@ public extension LoginServiceKit {
     
     @discardableResult
     static func removeLoginItems(at path: String = Bundle.main.bundlePath) -> Bool {
-        guard isExistLoginItems(at: path) else { return false }
-        
-        guard let sharedFileList = LSSharedFileListCreate(nil, kLSSharedFileListSessionLoginItems.takeRetainedValue(), nil) else { return false }
-        let loginItemList = sharedFileList.takeRetainedValue()
-        let url = URL(fileURLWithPath: path)
-        let loginItemsListSnapshot: NSArray = LSSharedFileListCopySnapshot(loginItemList, nil).takeRetainedValue()
-        guard let loginItems = loginItemsListSnapshot as? [LSSharedFileListItem] else { return false }
-        for loginItem in loginItems {
-            guard let resolvedUrl = LSSharedFileListItemCopyResolvedURL(loginItem, 0, nil) else { continue }
-            let itemUrl = resolvedUrl.takeRetainedValue() as URL
-            guard url.absoluteString == itemUrl.absoluteString else { continue }
-            LSSharedFileListItemRemove(loginItemList, loginItem)
+      guard isExistLoginItems(at: path) else { return false }
+
+      guard let listRef = LSSharedFileListCreate(nil,
+                                                 kLSSharedFileListSessionLoginItems.takeRetainedValue(),
+                                                 nil)?
+                              .takeRetainedValue() else { return false }
+
+      let targetURL = URL(fileURLWithPath: path)
+
+      guard let snapshotUnmanaged = LSSharedFileListCopySnapshot(listRef, nil) else { return false }
+      let cfArray: CFArray = snapshotUnmanaged.takeRetainedValue()
+
+      let items = (cfArray as NSArray) as? [LSSharedFileListItem] ?? []
+
+      for item in items {
+        guard let urlUnm = LSSharedFileListItemCopyResolvedURL(item, 0, nil) else { continue }
+        let itemURL = urlUnm.takeRetainedValue() as URL
+        if itemURL == targetURL {
+          LSSharedFileListItemRemove(listRef, item)
         }
-        return true
+      }
+
+      return true
     }
 }
 
 private extension LoginServiceKit {
-    static func loginItem(at path: String) -> LSSharedFileListItem? {
-        guard !path.isEmpty else { return nil }
-        
-        guard let sharedFileList = LSSharedFileListCreate(nil, kLSSharedFileListSessionLoginItems.takeRetainedValue(), nil) else { return nil }
-        let loginItemList = sharedFileList.takeRetainedValue()
-        let url = URL(fileURLWithPath: path)
-        let loginItemsListSnapshot: NSArray = LSSharedFileListCopySnapshot(loginItemList, nil).takeRetainedValue()
-        guard let loginItems = loginItemsListSnapshot as? [LSSharedFileListItem] else { return nil }
-        for loginItem in loginItems {
-            guard let resolvedUrl = LSSharedFileListItemCopyResolvedURL(loginItem, 0, nil) else { continue }
-            let itemUrl = resolvedUrl.takeRetainedValue() as URL
-            guard url.absoluteString == itemUrl.absoluteString else { continue }
-            return loginItem
-        }
-        return nil
+  static func loginItem(at path: String) -> LSSharedFileListItem? {
+    guard !path.isEmpty else { return nil }
+    
+    guard let shared = LSSharedFileListCreate(nil,
+                                              kLSSharedFileListSessionLoginItems.takeRetainedValue(),
+                                              nil)?
+                      .takeRetainedValue() else { return nil }
+    
+    guard let snapshotCF = LSSharedFileListCopySnapshot(shared, nil)?
+                           .takeRetainedValue() else { return nil }
+    
+    let items = (snapshotCF as NSArray) as? [LSSharedFileListItem] ?? []
+    let targetURL = URL(fileURLWithPath: path)
+
+    for item in items {
+      guard let unmanagedURL = LSSharedFileListItemCopyResolvedURL(item, 0, nil) else { continue }
+      let itemURL = unmanagedURL.takeRetainedValue() as URL
+      if itemURL == targetURL {
+        return item
+      }
     }
+    return nil
+  }
 }
