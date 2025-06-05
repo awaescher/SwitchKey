@@ -1,3 +1,15 @@
+# NOTE
+
+This is a fork of [SwitchKey](https://github.com/itsuhane/SwitchKey) by [@itsuhane](https://github.com/itsuhane). It it based on [@JasprW](https://github.com/JasprW)'s pull request [support default input source and fix layout #48](https://github.com/itsuhane/SwitchKey/pull/48) that adds a major improvement: **Setting a default layout.**
+
+![image](https://github.com/user-attachments/assets/009290dc-fc7c-4a29-b3da-9b1338b6af01)
+
+I just fixed two build errors with Xcode 16.4 and archived the app. You can download it from the releases tab.
+
+Made this for my own, use at your own risk.
+
+---
+
 ![switchkey](README.assets/switchkey.png)
 
 # SwitchKey
