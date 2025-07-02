@@ -60,6 +60,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource, NSTab
         }
     }
 
+    // Configuration for retry mechanism
+    private let maxRetryAttempts = 4
+    private let retryDelaySeconds = 5.0
+    private let newAppRetryDelaySeconds = 2.0
+
     private var applicationObservers:[pid_t:AXObserver] = [:]
     private var currentPid:pid_t = getpid()
 
@@ -102,9 +107,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource, NSTab
 
         workspace.notificationCenter.addObserver(self, selector: #selector(applicationTerminated(_:)), name: NSWorkspace.didTerminateApplicationNotification, object: workspace)
 
-        for application in workspace.runningApplications {
-            registerForAppSwitchNotification(application.processIdentifier)
-        }
+        // Initialize observer registration with retry mechanism
+        initializeObserversWithRetry()
 
         applicationSwitched()
     }
@@ -178,20 +182,115 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource, NSTab
     }
 
     private func registerForAppSwitchNotification(_ pid: pid_t) {
+        // For new applications, try immediate registration with single retry
+        if !registerForAppSwitchNotificationSafe(pid) {
+            // Retry once after configured delay for new applications
+            DispatchQueue.main.asyncAfter(deadline: .now() + newAppRetryDelaySeconds) {
+                if self.applicationObservers[pid] == nil {
+                    _ = self.registerForAppSwitchNotificationSafe(pid)
+                }
+            }
+        }
+    }
+    
+    private func initializeObserversWithRetry() {
+        registerObserversForRunningApplications(attempt: 1)
+    }
+    
+    private func registerObserversForRunningApplications(attempt: Int, specificProcesses: [pid_t]? = nil) {
+        let workspace = NSWorkspace.shared
+        var failedProcesses: [pid_t] = []
+        
+        // If specific processes are provided, only try those; otherwise try all running applications
+        let processesToTry: [pid_t]
+        if let specific = specificProcesses {
+            processesToTry = specific
+        } else {
+            processesToTry = workspace.runningApplications.map { $0.processIdentifier }
+        }
+        
+        // Try to register for the specified processes
+        for pid in processesToTry {
+            if pid != getpid() && applicationObservers[pid] == nil {
+                if !registerForAppSwitchNotificationSafe(pid) {
+                    failedProcesses.append(pid)
+                }
+            }
+        }
+        
+        // If there are failed processes and we haven't reached max attempts
+        if !failedProcesses.isEmpty && attempt < maxRetryAttempts {
+            print("Attempt \(attempt): Failed to register observers for \(failedProcesses.count) processes. Retrying in \(Int(retryDelaySeconds)) seconds...")
+            
+            DispatchQueue.main.asyncAfter(deadline: .now() + retryDelaySeconds) {
+                let stillFailedProcesses = self.retryFailedProcesses(failedProcesses)
+                self.registerObserversForRunningApplications(attempt: attempt + 1, specificProcesses: stillFailedProcesses)
+            }
+        } else if !failedProcesses.isEmpty && attempt >= maxRetryAttempts {
+            // Final failure after all attempts
+            let errorMessage = "Critical Error: Failed to register accessibility observers after \(maxRetryAttempts) attempts. This may indicate insufficient accessibility permissions or system issues. Failed processes: \(failedProcesses)"
+            print(errorMessage)
+            
+            // Log to system log
+            NSLog(errorMessage)
+            
+            // Show error dialog and terminate
+            DispatchQueue.main.async {
+                let alert = NSAlert()
+                alert.messageText = "SwitchKey Initialization Failed"
+                alert.informativeText = "Failed to initialize accessibility monitoring after multiple attempts. This may indicate system permission issues. The application will now close.\n\nPlease check system accessibility permissions and try restarting."
+                alert.alertStyle = .critical
+                alert.addButton(withTitle: "OK")
+                alert.runModal()
+                
+                NSApplication.shared.terminate(nil)
+            }
+        } else {
+            print("Successfully registered observers for all running applications on attempt \(attempt)")
+        }
+    }
+    
+    private func retryFailedProcesses(_ failedProcesses: [pid_t]) -> [pid_t] {
+        var stillFailedProcesses: [pid_t] = []
+        
+        // Retry only the failed processes
+        for pid in failedProcesses {
+            if applicationObservers[pid] == nil {
+                if !registerForAppSwitchNotificationSafe(pid) {
+                    stillFailedProcesses.append(pid)
+                }
+            }
+        }
+        
+        return stillFailedProcesses
+    }
+    
+    private func registerForAppSwitchNotificationSafe(_ pid: pid_t) -> Bool {
         if pid != getpid() {
             if applicationObservers[pid] == nil {
                 var observer: AXObserver!
                 guard AXObserverCreate(pid, applicationSwitchedCallback, &observer) == .success else {
-                    fatalError("")
+                    print("Warning: Could not create AXObserver for process \(pid)")
+                    return false
                 }
                 CFRunLoopAddSource(RunLoop.current.getCFRunLoop(), AXObserverGetRunLoopSource(observer), .defaultMode)
 
                 let element = AXUIElementCreateApplication(pid)
                 let selfPtr = UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque())
-                AXObserverAddNotification(observer, element, NSAccessibility.Notification.applicationActivated.rawValue as CFString, selfPtr)
-                applicationObservers[pid] = observer
+                let result = AXObserverAddNotification(observer, element, NSAccessibility.Notification.applicationActivated.rawValue as CFString, selfPtr)
+                
+                if result == .success {
+                    applicationObservers[pid] = observer
+                    return true
+                } else {
+                    // Failed to add notification observer - clean up
+                    CFRunLoopRemoveSource(RunLoop.current.getCFRunLoop(), AXObserverGetRunLoopSource(observer), .defaultMode)
+                    print("Warning: Could not add notification observer for process \(pid)")
+                    return false
+                }
             }
         }
+        return true // Already exists or is own process
     }
 
     func loadConditions() {

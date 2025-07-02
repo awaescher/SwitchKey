@@ -94,3 +94,6 @@ fastlane/test_output
 
 # FileMerge backup
 *.orig
+
+*.dylib
+*.nib
